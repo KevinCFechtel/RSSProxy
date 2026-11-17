@@ -1,0 +1,283 @@
+name: CI, security, and container
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Test and Go security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.7
+        env:
+          POSTGRES_DB: rssproxy_test
+          POSTGRES_USER: rssproxy
+          POSTGRES_PASSWORD: test-password-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rssproxy -d rssproxy_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://rssproxy:test-password-only@localhost:5432/rssproxy_test?sslmode=disable
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run tests including PostgreSQL with race detector
+        run: go test -race -count=1 -coverpkg=./internal/... -coverprofile=coverage.out ./...
+      - name: Run go vet
+        run: go vet ./...
+      - name: Build binary
+        run: go build -trimpath ./cmd/rssproxy
+      - name: Test CI helpers
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - name: Identity fuzzing
+        run: go test ./internal/feed -run '^$' -fuzz '^FuzzIdentityNeverPanics$' -fuzztime=10s -parallel=2
+      - name: Parser fuzzing
+        run: go test ./internal/feed -run '^$' -fuzz '^FuzzParseNeverPanics$' -fuzztime=10s -parallel=2
+      - name: Scan reachable Go vulnerabilities
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          repo-checkout: false
+          go-version-input: "1.27.x"
+          cache: false
+          go-package: ./...
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          show-openssf-scorecard: true
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: go
+      - name: Build for CodeQL
+        uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: /language:go
+
+  container-test:
+    name: Container smoke test (${{ matrix.arch }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      COMPOSE_FILE: compose.yaml:.github/compose.ci.yaml
+      COMPOSE_PROJECT_NAME: rssproxy-ci-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+      PORT: "18080"
+      FIXTURE_PORT: "18081"
+      POSTGRES_PASSWORD: ci-database-password-only
+      AUTH_USER: ci-admin
+      AUTH_PASSWORD: ci-admin-password-only
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build and load native container
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: ${{ matrix.platform }}
+          tags: rssproxy:ci
+          build-args: VERSION=${{ env.VERSION }}
+          cache-from: type=gha,scope=rssproxy-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=rssproxy-${{ matrix.arch }}
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Start service, PostgreSQL, and controlled feed source
+        run: docker compose up --detach --no-build --wait --wait-timeout 120
+      - name: Check runtime configuration and embedded version
+        run: |
+          test "$(docker image inspect rssproxy:ci --format '{{.Architecture}}')" = "$EXPECTED_ARCH"
+          test "$(docker image inspect rssproxy:ci --format '{{.Config.User}}')" = "65532:65532"
+          test "$(docker inspect "$(docker compose ps -q rssproxy)" --format '{{.HostConfig.ReadonlyRootfs}}')" = "true"
+          test "$(docker compose exec -T rssproxy /rssproxy version)" = "$VERSION"
+          docker compose exec -T rssproxy /rssproxy healthcheck
+      - name: Test authentication, RSS updates, revalidation, and upstream errors
+        run: python3 .github/scripts/container_smoke.py
+      - name: Restart service and wait for readiness
+        run: |
+          docker compose restart rssproxy
+          docker compose up --detach --no-build --wait --wait-timeout 120
+      - name: Verify persisted feed and article identity
+        run: python3 .github/scripts/container_smoke.py --check-persistence
+      - name: Scan container image with pinned Trivy
+        if: matrix.arch == 'amd64'
+        run: |
+          mkdir -p .ci-artifacts
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$PWD/.ci-artifacts:/workspace" \
+            aquasec/trivy@sha256:6fa071ef8daa2e58b90cbf1710bedca91adbb3bf98693533226f442035b836a6 \
+            image \
+            --exit-code 1 \
+            --severity HIGH,CRITICAL \
+            --format sarif \
+            --output /workspace/trivy-results.sarif \
+            rssproxy:ci
+      - name: Upload Trivy results to GitHub Security
+        if: >-
+          always() &&
+          matrix.arch == 'amd64' &&
+          hashFiles('.ci-artifacts/trivy-results.sarif') != '' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: .ci-artifacts/trivy-results.sarif
+          category: trivy-container
+      - name: Collect container diagnostics
+        if: always()
+        run: |
+          mkdir -p .ci-artifacts
+          docker compose logs --no-color > .ci-artifacts/compose.log 2>&1 || true
+          docker compose ps --all --format json > .ci-artifacts/containers.json 2>&1 || true
+      - name: Upload container diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: container-${{ matrix.arch }}
+          path: .ci-artifacts/
+          include-hidden-files: true
+          retention-days: 14
+      - name: Stop containers and remove isolated CI volumes
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  container:
+    name: Publish multi-platform release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - quality
+      - codeql
+      - container-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate semantic version tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/release_version.py
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.version.outputs.stable == 'true' }}
+            type=sha
+            type=raw,value=latest,enable=${{ steps.version.outputs.stable == 'true' }}
+      - name: Publish tested multi-platform release
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: |
+            type=gha,scope=rssproxy-amd64
+            type=gha,scope=rssproxy-arm64
+          provenance: mode=max
+          sbom: true

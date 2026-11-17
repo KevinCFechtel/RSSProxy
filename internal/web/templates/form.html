@@ -1,0 +1,54 @@
+{{define "form"}}{{template "header" .}}
+<form method="post" action="/admin/feeds/save">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="id" value="{{.Config.ID}}">
+<input type="hidden" name="revision" value="{{.Config.Revision}}">
+<fieldset><legend>Feed</legend>
+<label>Name (intern)<input name="name" value="{{.Config.Name}}" required maxlength="200"></label>
+<label>Öffentlicher Endpunkt<input name="path" placeholder="/feeds/faz" value="{{.Config.Path}}" required></label>
+<label>Quell-URL<input type="url" name="url" value="{{.Config.URL}}" required></label>
+</fieldset>
+<fieldset><legend>Artikelidentität</legend>
+<p>Eine konfigurierte Extraktion hat auch bei <code>isPermaLink=true</code> Vorrang. Eine nicht passende Regel führt zu einem Fehler, nicht zu einem stillen Fallback.</p>
+<label>Extraktionsquelle<select name="identity_source">
+<option value="guid" {{if eq .Config.Identity.Source "guid"}}selected{{end}}>Quell-GUID</option>
+<option value="link" {{if eq .Config.Identity.Source "link"}}selected{{end}}>Artikel-Link</option></select></label>
+<label>Strategie<select name="identity_kind">
+<option value="full" {{if eq .Config.Identity.Kind "full"}}selected{{end}}>Vollständigen Wert verwenden</option>
+<option value="regex" {{if eq .Config.Identity.Kind "regex"}}selected{{end}}>Regex mit benannter Gruppe id</option>
+<option value="query" {{if eq .Config.Identity.Kind "query"}}selected{{end}}>URL-Query-Parameter</option>
+<option value="legacy" {{if eq .Config.Identity.Kind "legacy"}}selected{{end}}>Alte Kürzungsregel</option></select></label>
+<label>Regex<input name="identity_regex" value="{{.Config.Identity.Regex}}" placeholder="-(?P&lt;id&gt;[0-9]+)\.html$"></label>
+<p>HTTP(S)-URLs werden zerlegt: Die Regex prüft nur den Pfad. FAZ: <code>-(?P&lt;id&gt;[0-9]+)\.html$</code>, Handelsblatt: <code>/(?P&lt;id&gt;[0-9]+)\.html$</code>.</p>
+<label>Query-Parameter<input name="identity_query" value="{{.Config.Identity.Query}}" placeholder="articleId"></label>
+<label>Erlaubte Artikel-Hosts (optional, durch Leerzeichen getrennt)<input name="identity_hosts" value="{{range .Config.Identity.Hosts}}{{.}} {{end}}" placeholder="www.faz.net faz.net"></label>
+<details {{if eq .Config.Identity.Kind "legacy"}}open{{end}}><summary>Importierte Kürzungsregel</summary>
+<p>Bei „End“ bezeichnet der Offset wie bisher die Länge des betrachteten GUID-Endstücks. „Start“ zählt den Offset vom Anfang. Die Länge bestimmt die Zahl übernommener Bytes.</p>
+<label>Richtung<select name="legacy_direction"><option value="Start" {{if eq .Config.Identity.LegacyDirection "Start"}}selected{{end}}>Start</option><option value="End" {{if eq .Config.Identity.LegacyDirection "End"}}selected{{end}}>End</option></select></label>
+<label>Offset<input type="number" min="0" name="legacy_offset" value="{{.Config.Identity.LegacyOffset}}"></label>
+<label>Länge<input type="number" min="0" name="legacy_length" value="{{.Config.Identity.LegacyLength}}"></label></details>
+</fieldset>
+<fieldset><legend>Ersetzungen</legend><p>Werte werden nur für die Ausgabe angewandt. Bilddateien werden nicht vom Proxy heruntergeladen. Entfernen ist nur bei optionalen Elementen möglich; fehlende Pflichtfelder eines RSS-Bildes entfernen das gesamte Bild.</p>
+{{range .Fields}}
+<div class="override"><label>{{.Label}}<select name="{{.Key}}_mode">
+<option value="original" {{if or (eq .Value.Mode "") (eq .Value.Mode "original")}}selected{{end}}>Original übernehmen</option>
+<option value="replace" {{if eq .Value.Mode "replace"}}selected{{end}}>Immer ersetzen</option>
+<option value="fallback" {{if eq .Value.Mode "fallback"}}selected{{end}}>Nur ergänzen, wenn fehlend</option>
+{{if not .Required}}<option value="remove" {{if eq .Value.Mode "remove"}}selected{{end}}>Entfernen</option>{{end}}</select></label>
+<label>Ersatzwert<input name="{{.Key}}_value" value="{{.Value.Value}}"></label></div>
+{{end}}
+<label>Artikelbild-Quelle<input name="item_image_source" value="{{.Config.Overrides.ItemImageSource}}" list="image-sources"></label>
+<datalist id="image-sources"><option value="auto"><option value="image"><option value="enclosure"><option value="media:content"><option value="media:thumbnail"><option value="itunes:image"></datalist>
+<p><code>auto</code>, <code>image</code>, <code>enclosure</code> (nur Bilder) oder <code>namespace:element</code>. Audio-/Video-Enclosures bleiben unabhängig vom Artikelbild erhalten.</p>
+</fieldset>
+<fieldset><legend>Regelvorschau ohne Speichern</legend>
+<p>Je Zeile ein Beispiel. GUIDs und Links derselben Zeilennummer gehören zusammen. Ohne Beispiele werden bis zu 50 Einträge des letzten erfolgreichen Abrufs verwendet.</p>
+<label>Beispiel-GUIDs<textarea name="preview_guids" rows="3">{{.PreviewGUIDs}}</textarea></label>
+<label>Beispiel-Links<textarea name="preview_links" rows="3">{{.PreviewLinks}}</textarea></label>
+<button type="submit" formaction="/admin/feeds/preview">Extraktion prüfen</button>
+{{if .Preview}}<div class="table-wrap"><table><thead><tr><th>Quell-GUID</th><th>Artikel-Link</th><th>Erkannte ID / Fehler</th></tr></thead><tbody>
+{{range .Preview}}<tr><td>{{.GUID}}</td><td>{{.Link}}</td><td>{{if .Error}}<span class="error">{{.Error}}</span>{{else}}<code>{{.Key}}</code>{{end}}</td></tr>{{end}}
+</tbody></table></div>{{end}}
+</fieldset>
+<div class="actions"><button type="submit">Speichern</button><a href="/admin/">Abbrechen</a></div>
+</form>{{template "footer" .}}{{end}}

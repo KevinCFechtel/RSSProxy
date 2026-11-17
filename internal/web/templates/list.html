@@ -1,0 +1,20 @@
+{{define "list"}}{{template "header" .}}
+<p><a class="button" href="/admin/feeds/new">Feed hinzufügen</a></p>
+{{range .Feeds}}
+<article>
+<h2>{{.Config.Name}}</h2>
+<dl>
+<dt>Endpunkt</dt><dd><a href="{{.Config.Path}}">{{.Config.Path}}</a> <small>Öffentlich; ein Aufruf kontaktiert die Quelle.</small></dd>
+<dt>Quelle</dt><dd>{{.Config.URL}}</dd>
+<dt>Identität</dt><dd>{{.Config.Identity.Source}} / {{.Config.Identity.Kind}}{{if eq .Config.Identity.Kind "legacy"}} <strong>Importierte Kürzungsregel – bitte mit Vorschau prüfen.</strong>{{end}}</dd>
+<dt>Letzter Versuch</dt><dd>{{if .State.LastAttempt}}{{.State.LastAttempt.Format "02.01.2006 15:04:05 MST"}}{{else}}Noch nicht abgerufen{{end}}</dd>
+<dt>Letzter Erfolg</dt><dd>{{if .State.LastSuccess}}{{.State.LastSuccess.Format "02.01.2006 15:04:05 MST"}}{{else}}–{{end}}</dd>
+{{if .State.LastError}}<dt>Fehler</dt><dd class="error">{{.State.LastError}}</dd>{{end}}
+</dl>
+<div class="actions"><a class="button" href="/admin/feeds/{{.Config.ID}}">Bearbeiten / Vorschau</a></div>
+<details><summary>Feed löschen</summary><p>Die Konfiguration und alle zugehörigen Identitätszuordnungen werden dauerhaft gelöscht.</p>
+<form method="post" action="/admin/feeds/{{.Config.ID}}/delete"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="revision" value="{{.Config.Revision}}">
+<button class="danger" type="submit">Feed endgültig löschen</button></form></details>
+</article>
+{{else}}<p>Noch keine Feeds konfiguriert. Neue Feeds hinzufügen oder beim Start eine alte Datenquelle zum Import konfigurieren.</p>{{end}}
+{{template "footer" .}}{{end}}

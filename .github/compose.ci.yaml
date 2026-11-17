@@ -1,0 +1,47 @@
+# Only used by CI together with compose.yaml. No production credentials/data.
+services:
+  rssproxy:
+    image: rssproxy:ci
+    restart: "no"
+    environment:
+      ALLOWED_NETWORKS: "172.30.250.10/32"
+      SOURCE_TIMEOUT: "2s"
+      REQUEST_TIMEOUT: "20s"
+      COOKIE_SECURE: "false"
+      LEGACY_DATABASE_URL: ""
+    depends_on:
+      fixture:
+        condition: service_healthy
+
+  db:
+    restart: "no"
+
+  fixture:
+    image: python:3.14-alpine
+    restart: "no"
+    command: ["python", "/fixtures/feed_source.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./.github/scripts:/fixtures:ro
+    ports:
+      - "127.0.0.1:${FIXTURE_PORT:-18081}:8080"
+    networks:
+      default:
+        ipv4_address: 172.30.250.10
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24

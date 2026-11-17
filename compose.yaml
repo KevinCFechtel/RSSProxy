@@ -1,0 +1,47 @@
+services:
+  rssproxy:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      DATABASE_URL: "host=db port=5432 user=rssproxy dbname=rssproxy sslmode=disable"
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?Set AUTH_PASSWORD in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SOURCE_TIMEOUT: ${SOURCE_TIMEOUT:-20s}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-60s}
+      MAX_FEED_BYTES: ${MAX_FEED_BYTES:-10485760}
+      ALLOWED_NETWORKS: ${ALLOWED_NETWORKS:-}
+      LEGACY_DATABASE_URL: ${LEGACY_DATABASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 75s
+
+  db:
+    image: postgres:18.7
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rssproxy
+      POSTGRES_USER: rssproxy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rssproxy -d rssproxy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres:
