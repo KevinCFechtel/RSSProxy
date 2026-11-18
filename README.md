@@ -118,6 +118,8 @@ Beim Start prüft RSSProxy automatisch, ob in der Zieldatenbank `rssDedupConfig`
 
 Importiert werden interne Namen, öffentliche Endpunkte, Quell-URLs, Bild-Einstellungen und Kürzungsregeln. Die alte Quelle wird ausschließlich innerhalb einer Read-only-Transaktion gelesen. Bestehende Ziel-Endpunkte werden nicht überschrieben. Ein Importmarker verhindert Wiederholungen und das Wiederanlegen später absichtlich gelöschter Konfigurationen.
 
+Der alte Artikelbild-Sonderwert `NoImage` wird als „Artikelbild entfernen“ übernommen. Leerzeichen am Anfang und Ende der Bildquelle werden beim Import entfernt.
+
 Ungültige Konfigurationen lassen den Import atomar und sichtbar fehlschlagen. Ohne alte Tabelle startet eine neue Installation leer. Ist eine separate alte Datenbank explizit konfiguriert, aber nicht erreichbar oder ohne erwartete Tabelle, bricht der Start mit einem Fehler ab.
 
 Importierte Kürzungsregeln in der Vorschau prüfen. „End“ verwendet wie bisher einen GUID-Endausschnitt mit der angegebenen Offset-Länge. „Start“ ist jetzt funktionsfähig und zählt den Offset vom Anfang. Beide Varianten sind gegen ungültige Grenzen abgesichert.
