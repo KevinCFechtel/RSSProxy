@@ -22,11 +22,30 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-Verwaltung: **http://localhost:8080/admin/**. Benutzer und Passwort stehen in `.env`. Dort einen Feed mit Quell-URL und öffentlichem Endpunkt anlegen, beispielsweise `/feeds/faz`. Feed-Endpunkte sind absichtlich **ohne Anmeldung** erreichbar.
+Verwaltung: **http://localhost:8080/admin/**. Benutzer und Passwort stehen in `.env`. Dort einen Feed mit Quell-URL und öffentlichem Endpunkt anlegen. Der öffentliche Endpunkt ist der vollständige, frei konfigurierte Pfad, beispielsweise `/faz`; es wird **kein `/feeds/`-Präfix** hinzugefügt. Feed-Endpunkte sind absichtlich **ohne Anmeldung** erreichbar.
+
+**Keine Startseite unter `/`:** Ein Aufruf von `http://localhost:8080/` liefert absichtlich `404 page not found`. Die Webverwaltung ist unter **`/admin/`** erreichbar.
 
 Compose veröffentlicht den HTTP-Port nur auf `127.0.0.1`. Für Netzwerkzugriff einen HTTPS-Reverse-Proxy vorschalten. In diesem Fall `COOKIE_SECURE=true` setzen. Basic Auth ohne HTTPS ist nur für lokalen Entwicklungsbetrieb vorgesehen. Für externe Datenbanken TLS mit Zertifikatsprüfung verwenden.
 
 **Wichtig:** Reverse-Proxy-Caches für Feed-Endpunkte deaktivieren. Sonst können Reader-Abrufe den Service und damit die Quelle umgehen.
+
+### URLs hinter einem Reverse Proxy
+
+Alle Pfade werden an die öffentliche Adresse einschließlich eines gegebenenfalls abweichenden Ports angehängt. Beispiel für `https://rss.example.de:9443`:
+
+| Zweck | Öffentliche URL | Erwartetes Verhalten |
+|---|---|---|
+| Webverwaltung | `https://rss.example.de:9443/admin/` | Ohne Zugangsdaten `401`, nach Anmeldung Verwaltung |
+| Feed, falls Endpunkt `/heise` konfiguriert | `https://rss.example.de:9443/heise` | Exakt der konfigurierte Pfad, ohne zusätzliches Präfix |
+| Liveness | `https://rss.example.de:9443/healthz` | `200 OK` |
+| Root-Pfad | `https://rss.example.de:9443/` | `404 page not found` – keine Startseite |
+
+RSSProxy muss den öffentlichen Hostnamen oder Port nicht kennen. `LISTEN_ADDR` legt nur die interne Listen-Adresse fest (standardmäßig `:8080`); Portweiterleitungen und Reverse Proxy dürfen andere Ports verwenden. Pfade und den ursprünglichen `Host`-Header einschließlich eines gegebenenfalls öffentlichen Ports unverändert weiterreichen.
+
+Den tatsächlichen Feed-Pfad zeigt die Verwaltung unter **Endpunkt** als anklickbaren Link. Beim Legacy-Import wird `httpEndpoint` unverändert übernommen: Aus `/heise` wird `/heise`, nicht `/feeds/heise`. `/feeds/…` funktioniert nur, wenn es ausdrücklich als Teil des Endpunkts konfiguriert wurde.
+
+Zur Fehlersuche `/healthz` sowohl direkt am veröffentlichten Container-Port als auch über die öffentliche Adresse prüfen. Funktioniert nur der direkte Aufruf, Reverse-Proxy-Routing und Pfadumschreibungen prüfen. `127.0.0.1` als Proxy-Ziel funktioniert nur, wenn der veröffentlichte Port im Netzwerk-Namespace des Reverse Proxys erreichbar ist, beispielsweise bei Caddy direkt auf demselben Host; ein separater Caddy-Container hat eine eigene Loopback-Adresse.
 
 ## Lokal ohne Docker
 
@@ -110,7 +129,17 @@ Artikelbild-Quelle: `auto`, `image`, `enclosure` (nur Bild-Anhänge) oder `names
 - XML-Erweiterungen, beispielsweise iTunes, Media RSS und Podcast Namespace, werden semantisch mit Namespaces, Attributen und Kindreihenfolge übernommen. Präfixe und XML-Schreibweise können sich ändern. Kein verlustfreier Format-Roundtrip: normalisierte RSS/Atom/JSON-Kernfelder werden auf RSS 2.0 abgebildet, Quell-Self-/Pagination-Links nicht übernommen.
 - Manche Reader bevorzugen eigene Favicons oder cachen Bilder unabhängig vom Feed.
 
-Feeds ohne RSS-Pflichtmetadaten benötigen passende Ersetzungen. Fehlerhafte Einträge führen zum Fehler des gesamten Abrufs, statt Nachrichten stillschweigend zu verlieren.
+Feeds ohne Titel oder Website-Link benötigen passende Ersetzungen. Eine leere oder fehlende Feed-Beschreibung wird hingegen als leeres `<description>`-Element ausgegeben, ohne Ersatztext zu erfinden. Dadurch lassen sich beispielsweise beim Capital-Feed nur das Logo ersetzen und die übrigen Metadaten unverändert übernehmen. Fehlerhafte Einträge führen zum Fehler des gesamten Abrufs, statt Nachrichten stillschweigend zu verlieren.
+
+Zum ausschließlichen Ersetzen des Feed-Icons unter **Bearbeiten / Vorschau → Ersetzungen** bei **Feed-Bild / Logo-URL** den Modus **Immer ersetzen** wählen und die gewünschte Bild-URL eintragen. Alle übrigen Ersetzungen auf **Original übernehmen** belassen; Artikelbild-Einstellungen nicht ändern.
+
+### Fehler: fehlender Feed-Titel oder Website-Link
+
+Die Meldung `RSS requires channel title and website link; configure overrides for missing values` bedeutet, dass nach Anwendung der Ersetzungen der Titel oder Website-Link leer ist. Sie bezeichnet keinen Fehler der Artikelidentitätsregel, auch wenn die übergeordnete Fehlermeldung `invalid source feed or identity rule` lautet.
+
+Unter `/admin/` beim betroffenen Feed **Bearbeiten / Vorschau → Ersetzungen** öffnen. Für fehlende Werte bei **Feed-Titel** oder **Website-Link** den Modus **Nur ergänzen, wenn fehlend** wählen und passende Ersatzwerte eintragen. Der Website-Link ist die HTTP(S)-Adresse der Website des Anbieters, nicht der öffentliche Proxy-Endpunkt. Speichern und den Feed erneut abrufen. **Name (intern)** wird nicht automatisch als Feed-Titel oder Beschreibung eingesetzt.
+
+Ältere Versionen melden zusätzlich `description` in diesem Fehler und lehnen auch leere Beschreibungen ab. Falls der Quellfeed wie `https://www.capital.de/feed/standard/` eine leere Beschreibung liefert, eine Version mit der entsprechenden Korrektur deployen; ein zusätzlicher Beschreibungs-Override ist dann nicht nötig.
 
 ## Import aus goRssDedup
 
