@@ -190,18 +190,31 @@ func TestLegacyImportIsReadOnlyAndIdempotent(t *testing.T) {
 		id BIGINT PRIMARY KEY,httpEndpoint TEXT,feedName TEXT,feedURL TEXT,
 		feedIDFromStartOrEnd TEXT,feedIDLength INT,feedIDFromStartOrEndLength INT,
 		feedIconURL TEXT,artikelImageTag TEXT);
-		INSERT INTO rssDedupConfig VALUES(7,'/old-feed','Legacy','https://example.org/rss',
-		'End',3,8,'https://example.org/custom.png','media:content')`)
+		INSERT INTO rssDedupConfig VALUES
+		(7,'/old-feed','Legacy','https://example.org/rss',
+		'End',3,8,'https://example.org/custom.png',' media:content '),
+		(8,'/no-image','HEISE','https://example.org/heise',
+		'End',3,8,'Existing','NoImage')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	count, err := db.ImportLegacy(ctx, "")
-	if err != nil || count != 1 {
+	if err != nil || count != 2 {
 		t.Fatalf("import: count=%d err=%v", count, err)
 	}
 	c, err := db.ByPath(ctx, "/old-feed")
 	if err != nil || c.Identity.Kind != "legacy" || c.Overrides.ImageURL.Value != "https://example.org/custom.png" {
 		t.Fatalf("bad import: %+v %v", c, err)
+	}
+	if c.Overrides.ItemImageSource != "media:content" {
+		t.Fatalf("image source was not trimmed: %q", c.Overrides.ItemImageSource)
+	}
+	noImage, err := db.ByPath(ctx, "/no-image")
+	if err != nil || noImage.Overrides.ItemImage.Mode != "remove" || noImage.Overrides.ItemImageSource != "auto" {
+		t.Fatalf("NoImage was not converted to image removal: %+v %v", noImage, err)
+	}
+	if err := noImage.Validate(); err != nil {
+		t.Fatalf("NoImage produced an invalid configuration: %v", err)
 	}
 	key, err := c.Identity.Key("prefix-123-tail", "")
 	if err != nil || key != "123" {
@@ -221,6 +234,10 @@ func TestLegacyImportIsReadOnlyAndIdempotent(t *testing.T) {
 	var name string
 	if err := db.Pool.QueryRow(ctx, `SELECT feedName FROM rssDedupConfig WHERE id=7`).Scan(&name); err != nil || name != "Legacy" {
 		t.Fatal("legacy table changed")
+	}
+	var imageTag string
+	if err := db.Pool.QueryRow(ctx, `SELECT artikelImageTag FROM rssDedupConfig WHERE id=8`).Scan(&imageTag); err != nil || imageTag != "NoImage" {
+		t.Fatal("legacy NoImage setting changed")
 	}
 }
 

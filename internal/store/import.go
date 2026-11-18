@@ -81,7 +81,13 @@ func (s *Store) ImportLegacy(ctx context.Context, sourceURL string) (int, error)
 		if icon != "" && icon != "Existing" {
 			c.Overrides.ImageURL = feed.Override{Mode: "replace", Value: icon}
 		}
-		if strings.TrimSpace(imageTag) != "" {
+		imageTag = strings.TrimSpace(imageTag)
+		switch imageTag {
+		case "NoImage":
+			c.Overrides.ItemImage = feed.Override{Mode: "remove"}
+		case "":
+			// Keep the default automatic image selection.
+		default:
 			c.Overrides.ItemImageSource = imageTag
 		}
 		if err := c.Validate(); err != nil {
