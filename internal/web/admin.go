@@ -138,13 +138,13 @@ func (a *Admin) csrf(next http.Handler) http.Handler {
 
 func overrideFields(c feed.Config) []field {
 	return []field{
-		{"title", "Feed-Titel", c.Overrides.Title, true},
-		{"description", "Feed-Beschreibung", c.Overrides.Description, true},
-		{"link", "Website-Link", c.Overrides.Link, true},
-		{"image_url", "Feed-Bild / Logo-URL", c.Overrides.ImageURL, false},
-		{"image_title", "Bildtitel", c.Overrides.ImageTitle, false},
-		{"image_link", "Bild-Link", c.Overrides.ImageLink, false},
-		{"item_image", "Artikelbild-URL", c.Overrides.ItemImage, false},
+		{"title", "Feed title", c.Overrides.Title, true},
+		{"description", "Feed description", c.Overrides.Description, true},
+		{"link", "Website link", c.Overrides.Link, true},
+		{"image_url", "Feed image / Logo URL", c.Overrides.ImageURL, false},
+		{"image_title", "Image title", c.Overrides.ImageTitle, false},
+		{"image_link", "Image link", c.Overrides.ImageLink, false},
+		{"item_image", "Article image URL", c.Overrides.ItemImage, false},
 	}
 }
 
@@ -181,7 +181,7 @@ func (a *Admin) form(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.render(w, r, "form", page{Title: "Feed konfigurieren", Config: c}, http.StatusOK)
+	a.render(w, r, "form", page{Title: "Configure feed", Config: c}, http.StatusOK)
 }
 
 func configFromForm(r *http.Request) (feed.Config, error) {
@@ -190,13 +190,13 @@ func configFromForm(r *http.Request) (feed.Config, error) {
 	if value := r.PostForm.Get("id"); value != "" {
 		c.ID, err = strconv.ParseInt(value, 10, 64)
 		if err != nil || c.ID < 0 {
-			return c, errors.New("Ungültige Feed-ID")
+			return c, errors.New("Invalid feed ID")
 		}
 	}
 	if value := r.PostForm.Get("revision"); value != "" {
 		c.Revision, err = strconv.ParseInt(value, 10, 64)
 		if err != nil || c.Revision < 0 {
-			return c, errors.New("Ungültige Konfigurationsversion")
+			return c, errors.New("Invalid configuration revision")
 		}
 	}
 	c.Name = strings.TrimSpace(r.PostForm.Get("name"))
@@ -215,7 +215,7 @@ func configFromForm(r *http.Request) (feed.Config, error) {
 		if text := r.PostForm.Get(value.name); text != "" {
 			*value.dest, err = strconv.Atoi(text)
 			if err != nil {
-				return c, errors.New("Ungültiger Legacy-Offset")
+				return c, errors.New("Invalid legacy offset or length")
 			}
 		}
 	}
@@ -237,13 +237,13 @@ func configFromForm(r *http.Request) (feed.Config, error) {
 func (a *Admin) save(w http.ResponseWriter, r *http.Request) {
 	c, err := configFromForm(r)
 	if err != nil {
-		a.render(w, r, "form", page{Title: "Feed konfigurieren", Config: c, Error: err.Error()}, http.StatusBadRequest)
+		a.render(w, r, "form", page{Title: "Configure feed", Config: c, Error: err.Error()}, http.StatusBadRequest)
 		return
 	}
 	_, err = a.Store.Save(r.Context(), c)
 	if errors.Is(err, store.ErrConflict) {
-		a.render(w, r, "form", page{Title: "Feed konfigurieren", Config: c,
-			Error: "Endpunkt bereits vergeben oder Konfiguration inzwischen geändert. Bitte neu laden."}, http.StatusConflict)
+		a.render(w, r, "form", page{Title: "Configure feed", Config: c,
+			Error: "Endpoint already in use or configuration has changed. Please reload."}, http.StatusConflict)
 		return
 	}
 	if err != nil {
@@ -255,7 +255,7 @@ func (a *Admin) save(w http.ResponseWriter, r *http.Request) {
 
 func (a *Admin) preview(w http.ResponseWriter, r *http.Request) {
 	c, err := configFromForm(r)
-	p := page{Title: "Regelvorschau", Config: c,
+	p := page{Title: "Rule preview", Config: c,
 		PreviewGUIDs: r.PostForm.Get("preview_guids"), PreviewLinks: r.PostForm.Get("preview_links")}
 	if err != nil {
 		p.Error = err.Error()
@@ -304,7 +304,7 @@ func (a *Admin) preview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(p.Preview) == 0 {
-		p.Error = "Noch keine Quelldaten vorhanden. Bitte Beispiel-GUIDs oder Links eintragen."
+		p.Error = "No source data available yet. Please enter example GUIDs or links."
 	}
 	a.render(w, r, "form", p, http.StatusOK)
 }

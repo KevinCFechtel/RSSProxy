@@ -105,9 +105,11 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 		Published: timeString(f.PublishedParsed), Updated: timeString(f.UpdatedParsed),
 		Extras: append([]Element(nil), doc.Extras...),
 	}
-	if strings.TrimSpace(channel.Title) == "" || strings.TrimSpace(channel.Description) == "" ||
-		channel.Link == "" {
-		return nil, errors.New("RSS requires channel title, description and website link; configure overrides for missing values")
+	// Some publishers (for example Capital) provide an empty description.
+	// Preserve it and still emit the required description element, rather than
+	// blocking unrelated overrides or inventing metadata.
+	if strings.TrimSpace(channel.Title) == "" || channel.Link == "" {
+		return nil, errors.New("RSS requires channel title and website link; configure overrides for missing values")
 	}
 	if _, err := HTTPURL(channel.Link); err != nil {
 		return nil, errors.New("channel website link is not an HTTP(S) URL")

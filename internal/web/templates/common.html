@@ -1,6 +1,6 @@
 {{define "header"}}<!doctype html>
-<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}} · RSSProxy</title><link rel="stylesheet" href="/admin/static/style.css"></head>
-<body><header><a href="/admin/">RSSProxy</a><span>RSS ohne wechselnde Artikelidentitäten</span></header><main>
+<body><header><a href="/admin/">RSSProxy</a><span>RSS with stable article identities</span></header><main>
 <h1>{{.Title}}</h1>{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}{{end}}
-{{define "footer"}}</main><footer>Jeder Feed-Abruf kontaktiert die Quelle. Die Regelvorschau ruft keine Quelle auf und verändert keine Daten.</footer></body></html>{{end}}
+{{define "footer"}}</main><footer>Every feed request contacts the source. The rule preview does not contact the source or change any data.</footer></body></html>{{end}}

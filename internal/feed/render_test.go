@@ -96,6 +96,75 @@ func TestRenderPreservesPodcastAndOriginals(t *testing.T) {
 	}
 }
 
+func TestLogoReplacementWithEmptyChannelDescription(t *testing.T) {
+	t.Parallel()
+	for _, description := range []string{"<description />", "<description></description>", ""} {
+		t.Run(description, func(t *testing.T) {
+			// Capital's RSS feed has a title and website link, but an empty description.
+			source := `<rss version="2.0"><channel><title>Capital.de</title>
+<link>https://www.capital.de/</link>` + description + `
+<image><url>https://example.org/original.png</url><title>Capital.de</title><link>https://www.capital.de/</link></image>
+<item><title>Article</title><guid>https://www.capital.de/article-123.html</guid>
+<description>Article text</description>
+<enclosure url="https://example.org/article.jpg" type="image/jpeg" length="0"/>
+</item></channel></rss>`
+			c, doc, ids := fixture(t, source)
+			c.Name, c.Path, c.URL = "Capital", "/capital", "https://www.capital.de/feed/standard/"
+			c.Overrides.ImageURL = Override{Mode: "replace", Value: "https://example.org/replacement.png"}
+			body, err := Render(c, doc, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := Parse(body)
+			if err != nil {
+				t.Fatalf("generated RSS cannot be parsed: %v\n%s", err, body)
+			}
+			if output.Feed.Title != doc.Feed.Title || output.Feed.Link != doc.Feed.Link ||
+				output.Feed.Description != "" || !bytes.Contains(body, []byte("<description></description>")) {
+				t.Fatalf("channel metadata changed or description element omitted: %s", body)
+			}
+			if output.Feed.Image == nil || output.Feed.Image.URL != c.Overrides.ImageURL.Value {
+				t.Fatalf("logo was not replaced: %s", body)
+			}
+			item := output.Feed.Items[0]
+			if item.Title != doc.Feed.Items[0].Title || item.Description != "Article text" ||
+				len(item.Enclosures) != 1 || item.Enclosures[0].URL != "https://example.org/article.jpg" {
+				t.Fatalf("logo replacement changed article metadata: %s", body)
+			}
+			if doc.Feed.Description != "" || doc.Feed.Image.URL != "https://example.org/original.png" {
+				t.Fatal("rendering mutated source metadata")
+			}
+
+			c.Overrides.Description = Override{Mode: "fallback", Value: "Configured description"}
+			body, err = Render(c, doc, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err = Parse(body)
+			if err != nil || output.Feed.Description != "Configured description" {
+				t.Fatalf("explicit description fallback failed: %v\n%s", err, body)
+			}
+		})
+	}
+}
+
+func TestRenderStillRequiresChannelTitleAndWebsiteLink(t *testing.T) {
+	t.Parallel()
+	for _, field := range []string{"title", "link"} {
+		t.Run(field, func(t *testing.T) {
+			c, doc, ids := fixture(t, podcastFixture)
+			if field == "title" {
+				doc.Feed.Title = ""
+			} else {
+				doc.Feed.Link = ""
+			}
+			if _, err := Render(c, doc, ids); err == nil {
+				t.Fatalf("missing channel %s accepted", field)
+			}
+		})
+	}
+}
+
 func TestOptionalFieldsAndDuplicateItems(t *testing.T) {
 	t.Parallel()
 	source := `<rss version="2.0"><channel><title>Feed</title><link>https://example.org</link><description>News</description>
