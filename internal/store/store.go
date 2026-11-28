@@ -593,7 +593,7 @@ func (s *Store) Delete(ctx context.Context, id, revision int64) error {
 
 func classify(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && (pgErr.Code == "23505" || pgErr.Code == "23503") {
+	if errors.As(err, &pgErr) && (pgErr.Code == "23505" || pgErr.Code == "23503" || pgErr.Code == "23001") {
 		return ErrConflict
 	}
 	return err
