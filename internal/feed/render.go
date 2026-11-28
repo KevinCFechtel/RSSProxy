@@ -97,10 +97,14 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 		return nil, errors.New("missing parsed feed")
 	}
 	f := doc.Feed
+	baseURL := c.URL
+	if doc.BaseURL != "" {
+		baseURL = doc.BaseURL
+	}
 	channel := rssChannel{
 		Title:       c.Overrides.Title.Apply(f.Title),
 		Description: c.Overrides.Description.Apply(f.Description),
-		Link:        c.Overrides.Link.Apply(resolve(c.URL, f.Link)),
+		Link:        c.Overrides.Link.Apply(resolve(baseURL, f.Link)),
 		Language:    f.Language, Copyright: f.Copyright, Generator: "RSSProxy",
 		Published: timeString(f.PublishedParsed), Updated: timeString(f.UpdatedParsed),
 		Extras: append([]Element(nil), doc.Extras...),
@@ -128,11 +132,11 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 	}
 	imageURL, imageTitle := "", ""
 	if f.Image != nil {
-		imageURL, imageTitle = resolve(c.URL, f.Image.URL), f.Image.Title
+		imageURL, imageTitle = resolve(baseURL, f.Image.URL), f.Image.Title
 	}
 	imageURL = c.Overrides.ImageURL.Apply(imageURL)
 	imageTitle = c.Overrides.ImageTitle.Apply(imageTitle)
-	imageLink := c.Overrides.ImageLink.Apply(resolve(c.URL, doc.ImageLink))
+	imageLink := c.Overrides.ImageLink.Apply(resolve(baseURL, doc.ImageLink))
 	if imageURL != "" && c.Overrides.ImageTitle.Mode != "remove" && c.Overrides.ImageLink.Mode != "remove" {
 		if imageTitle == "" {
 			imageTitle = channel.Title
@@ -152,6 +156,10 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 	}
 	positions := make(map[string]int)
 	for index, item := range f.Items {
+		itemBaseURL := baseURL
+		if index < len(doc.ItemSourceURLs) && doc.ItemSourceURLs[index] != "" {
+			itemBaseURL = doc.ItemSourceURLs[index]
+		}
 		if item == nil {
 			return nil, errors.New("source contains an empty item")
 		}
@@ -164,7 +172,7 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 			return nil, fmt.Errorf("item %d has no persisted identity", index+1)
 		}
 		out := rssItem{
-			Title: item.Title, Link: resolve(c.URL, item.Link), Description: item.Description,
+			Title: item.Title, Link: resolve(itemBaseURL, item.Link), Description: item.Description,
 			GUID:      guidElement{Value: identity.GUID, IsPermalink: "false"},
 			Published: timeString(identity.Published),
 		}
@@ -219,10 +227,10 @@ func Render(c Config, doc *Document, identities map[string]Identity) ([]byte, er
 			if err != nil || n < 0 {
 				return nil, fmt.Errorf("item %d has an invalid enclosure byte length", index+1)
 			}
-			out.Enclosures = append(out.Enclosures, enclosure{URL: resolve(c.URL, e.URL), Type: e.Type, Length: length})
+			out.Enclosures = append(out.Enclosures, enclosure{URL: resolve(itemBaseURL, e.URL), Type: e.Type, Length: length})
 		}
 		img := selectImage(c.Overrides.ItemImageSource, item, out.Extras)
-		img = c.Overrides.ItemImage.Apply(resolve(c.URL, img))
+		img = c.Overrides.ItemImage.Apply(resolve(itemBaseURL, img))
 		if c.Overrides.ItemImage.Mode == "replace" || c.Overrides.ItemImage.Mode == "remove" ||
 			(c.Overrides.ItemImageSource != "" && c.Overrides.ItemImageSource != "auto") {
 			out.Extras = filterArtwork(out.Extras)

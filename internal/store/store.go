@@ -25,9 +25,10 @@ import (
 var migrations embed.FS
 
 var (
-	ErrNotFound    = errors.New("feed not found")
-	ErrConflict    = errors.New("endpoint already exists or configuration was changed by another request")
-	ErrInvalidFeed = errors.New("invalid source feed or identity rule")
+	ErrNotFound     = errors.New("feed not found")
+	ErrConflict     = errors.New("endpoint already exists or configuration was changed by another request")
+	ErrInvalidFeed  = errors.New("invalid source feed or identity rule")
+	ErrInvalidGroup = errors.New("group sources must be existing regular feeds")
 )
 
 type Store struct{ Pool *pgxpool.Pool }
@@ -41,8 +42,9 @@ type State struct {
 }
 
 type Summary struct {
-	Config feed.Config
-	State  State
+	Config      feed.Config
+	State       State
+	SourceNames []string
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -171,15 +173,30 @@ func (s *Store) List(ctx context.Context) ([]Summary, error) {
 		}
 		summaries = append(summaries, summary)
 	}
-	return summaries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	names := make(map[int64]string, len(summaries))
+	for _, summary := range summaries {
+		names[summary.Config.ID] = summary.Config.Name
+	}
+	for i := range summaries {
+		for _, id := range summaries[i].Config.SourceIDs {
+			if name, ok := names[id]; ok {
+				summaries[i].SourceNames = append(summaries[i].SourceNames, name)
+			}
+		}
+	}
+	return summaries, nil
 }
 
 // Locked owns a session advisory lock, not a transaction. Every request still
 // performs its own source fetch; serialization prevents older responses from
 // overwriting newer snapshots, including across multiple service instances.
 type Locked struct {
-	conn   *pgxpool.Conn
-	Config feed.Config
+	conn     *pgxpool.Conn
+	Config   feed.Config
+	borrowed bool
 }
 
 func (s *Store) Lock(ctx context.Context, id int64) (*Locked, error) {
@@ -187,15 +204,31 @@ func (s *Store) Lock(ctx context.Context, id int64) (*Locked, error) {
 	if err != nil {
 		return nil, err
 	}
+	return lock(ctx, conn, id, false)
+}
+
+// LockSource borrows the group's connection, avoiding pool starvation when
+// other requests occupy the pool while waiting for the group lock.
+// The caller must close the source before using or closing the group again.
+func (l *Locked) LockSource(ctx context.Context, id int64) (*Locked, error) {
+	if l.Config.Type != "group" || !slices.Contains(l.Config.SourceIDs, id) || id == l.Config.ID {
+		return nil, ErrInvalidGroup
+	}
+	return lock(ctx, l.conn, id, true)
+}
+
+func lock(ctx context.Context, conn *pgxpool.Conn, id int64, borrowed bool) (*Locked, error) {
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, id); err != nil {
 		closeConnection(conn) // cancellation must never leave a lock in the pool
-		conn.Release()
+		if !borrowed {
+			conn.Release()
+		}
 		return nil, err
 	}
-	l := &Locked{conn: conn, Config: feed.Config{ID: id}}
+	l := &Locked{conn: conn, Config: feed.Config{ID: id}, borrowed: borrowed}
 	var raw []byte
 	var rev int64
-	err = conn.QueryRow(ctx, `SELECT revision, config FROM rssproxy_feeds WHERE id=$1`, id).Scan(&rev, &raw)
+	err := conn.QueryRow(ctx, `SELECT revision, config FROM rssproxy_feeds WHERE id=$1`, id).Scan(&rev, &raw)
 	if err != nil {
 		l.Close()
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -228,7 +261,9 @@ func unlock(conn *pgxpool.Conn, id int64) {
 
 func (l *Locked) Close() {
 	unlock(l.conn, l.Config.ID)
-	l.conn.Release()
+	if !l.borrowed {
+		l.conn.Release()
+	}
 }
 
 func (l *Locked) State(ctx context.Context) (State, error) {
@@ -251,6 +286,25 @@ func (l *Locked) State(ctx context.Context) (State, error) {
 		}
 	}
 	return state, nil
+}
+
+// StoreDocument records upstream validators independently of the source's own
+// identity and presentation rules. Group and standalone requests share them.
+func (l *Locked) StoreDocument(ctx context.Context, doc *feed.Document, validators fetch.Validators) error {
+	if l.Config.Type != "" || doc == nil || doc.Feed == nil {
+		return ErrInvalidGroup
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	_, err = l.conn.Exec(ctx, `INSERT INTO rssproxy_fetch_state
+		(feed_id,document,etag,last_modified,last_attempt,last_success,last_error)
+		VALUES($1,$2,$3,$4,now(),now(),'') ON CONFLICT(feed_id) DO UPDATE SET
+		document=EXCLUDED.document,etag=EXCLUDED.etag,last_modified=EXCLUDED.last_modified,
+		last_attempt=now(),last_success=now(),last_error=''`,
+		l.Config.ID, raw, validators.ETag, validators.LastModified)
+	return err
 }
 
 func (l *Locked) RecordError(ctx context.Context, message string) error {
@@ -420,6 +474,43 @@ func newUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
+// Source types cannot change, and key-share locks prevent concurrent deletion.
+func validateGroupSources(ctx context.Context, tx pgx.Tx, c feed.Config) error {
+	if c.Type != "group" {
+		return nil
+	}
+	for _, id := range c.SourceIDs {
+		var raw []byte
+		err := tx.QueryRow(ctx, `SELECT config FROM rssproxy_feeds WHERE id=$1 FOR KEY SHARE`, id).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidGroup
+		}
+		if err != nil {
+			return err
+		}
+		var source feed.Config
+		if err := json.Unmarshal(raw, &source); err != nil {
+			return err
+		}
+		if source.Type != "" {
+			return ErrInvalidGroup
+		}
+	}
+	return nil
+}
+
+func saveGroupSources(ctx context.Context, tx pgx.Tx, groupID int64, ids []int64) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM rssproxy_group_sources WHERE group_id=$1`, groupID); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `INSERT INTO rssproxy_group_sources(group_id,feed_id) VALUES($1,$2)`, groupID, id); err != nil {
+			return classify(err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) Save(ctx context.Context, c feed.Config) (int64, error) {
 	if err := c.Validate(); err != nil {
 		return 0, err
@@ -429,16 +520,35 @@ func (s *Store) Save(ctx context.Context, c feed.Config) (int64, error) {
 		return 0, err
 	}
 	if c.ID == 0 {
+		tx, err := s.Pool.Begin(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = tx.Rollback(context.Background()) }()
+		if err := validateGroupSources(ctx, tx, c); err != nil {
+			return 0, err
+		}
 		var id int64
-		err := s.Pool.QueryRow(ctx, `INSERT INTO rssproxy_feeds(path,config) VALUES($1,$2) RETURNING id`, c.Path, raw).Scan(&id)
-		return id, classify(err)
+		err = tx.QueryRow(ctx, `INSERT INTO rssproxy_feeds(path,config) VALUES($1,$2) RETURNING id`, c.Path, raw).Scan(&id)
+		if err != nil {
+			return 0, classify(err)
+		}
+		if c.Type == "group" {
+			if err := saveGroupSources(ctx, tx, id, c.SourceIDs); err != nil {
+				return 0, err
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, classify(err)
+		}
+		return id, nil
 	}
 	l, err := s.Lock(ctx, c.ID)
 	if err != nil {
 		return 0, err
 	}
 	defer l.Close()
-	if l.Config.Revision != c.Revision {
+	if l.Config.Revision != c.Revision || l.Config.Type != c.Type {
 		return 0, ErrConflict
 	}
 	tx, err := l.conn.Begin(ctx)
@@ -446,18 +556,26 @@ func (s *Store) Save(ctx context.Context, c feed.Config) (int64, error) {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := validateGroupSources(ctx, tx, c); err != nil {
+		return 0, err
+	}
 	_, err = tx.Exec(ctx, `UPDATE rssproxy_feeds SET path=$1,config=$2,revision=revision+1,updated_at=now()
 		WHERE id=$3`, c.Path, raw, c.ID)
 	if err != nil {
 		return 0, classify(err)
 	}
-	if l.Config.URL != c.URL {
-		// Validators and content from another source must not satisfy a 304.
+	if c.Type == "group" {
+		if err := saveGroupSources(ctx, tx, c.ID, c.SourceIDs); err != nil {
+			return 0, err
+		}
+	}
+	if l.Config.URL != c.URL || !slices.Equal(l.Config.SourceIDs, c.SourceIDs) {
+		// Never reuse a snapshot or validators after changing sources.
 		if _, err := tx.Exec(ctx, `DELETE FROM rssproxy_fetch_state WHERE feed_id=$1`, c.ID); err != nil {
 			return 0, err
 		}
 	}
-	return c.ID, tx.Commit(ctx)
+	return c.ID, classify(tx.Commit(ctx))
 }
 
 func (s *Store) Delete(ctx context.Context, id, revision int64) error {
@@ -470,12 +588,12 @@ func (s *Store) Delete(ctx context.Context, id, revision int64) error {
 		return ErrConflict
 	}
 	_, err = l.conn.Exec(ctx, `DELETE FROM rssproxy_feeds WHERE id=$1`, id)
-	return err
+	return classify(err)
 }
 
 func classify(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+	if errors.As(err, &pgErr) && (pgErr.Code == "23505" || pgErr.Code == "23503") {
 		return ErrConflict
 	}
 	return err

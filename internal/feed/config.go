@@ -54,10 +54,13 @@ type Overrides struct {
 }
 
 type Config struct {
-	ID        int64        `json:"id"`
-	Name      string       `json:"name"`
-	Path      string       `json:"path"`
-	URL       string       `json:"url"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	URL  string `json:"url"`
+	// Type is empty for regular feeds and "group" for merged feeds.
+	Type      string       `json:"type,omitempty"`
+	SourceIDs []int64      `json:"source_ids,omitempty"`
 	Identity  IdentityRule `json:"identity"`
 	Overrides Overrides    `json:"overrides"`
 	Revision  int64        `json:"revision"`
@@ -83,11 +86,33 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Name) == "" || len(c.Name) > 200 {
 		return errors.New("name must contain 1–200 characters")
 	}
-	if len(c.URL) > 4096 {
-		return errors.New("source URL is too long")
-	}
-	if _, err := HTTPURL(c.URL); err != nil {
-		return fmt.Errorf("source URL: %w", err)
+	switch c.Type {
+	case "":
+		if len(c.SourceIDs) != 0 {
+			return errors.New("regular feeds cannot have group sources")
+		}
+		if len(c.URL) > 4096 {
+			return errors.New("source URL is too long")
+		}
+		if _, err := HTTPURL(c.URL); err != nil {
+			return fmt.Errorf("source URL: %w", err)
+		}
+	case "group":
+		if c.URL != "" {
+			return errors.New("groups do not have a source URL")
+		}
+		if len(c.SourceIDs) == 0 || len(c.SourceIDs) > 8 {
+			return errors.New("group requires between 1 and 8 source feeds")
+		}
+		seen := make(map[int64]bool, len(c.SourceIDs))
+		for _, id := range c.SourceIDs {
+			if id <= 0 || id == c.ID || seen[id] {
+				return errors.New("group source IDs must be positive, unique and different from the group")
+			}
+			seen[id] = true
+		}
+	default:
+		return errors.New("unknown feed type")
 	}
 	u, err := url.ParseRequestURI(c.Path)
 	if err != nil || u.Path != c.Path || u.RawQuery != "" || u.Host != "" ||

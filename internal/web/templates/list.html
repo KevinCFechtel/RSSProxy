@@ -1,11 +1,15 @@
 {{define "list"}}{{template "header" .}}
-<p><a class="button" href="/admin/feeds/new">Add feed</a></p>
+<p><a class="button" href="/admin/feeds/new">Add feed</a> <a class="button" href="/admin/groups/new">Add group</a></p>
 {{range .Feeds}}
 <article>
 <h2>{{.Config.Name}}</h2>
 <dl>
 <dt>Endpoint</dt><dd><a href="{{.Config.Path}}">{{.Config.Path}}</a> <small>Public; each request contacts the source.</small></dd>
+{{if eq .Config.Type "group"}}
+<dt>Group sources</dt><dd>{{range .SourceNames}}{{.}}; {{end}}</dd>
+{{else}}
 <dt>Source</dt><dd>{{.Config.URL}}</dd>
+{{end}}
 <dt>Identity</dt><dd>{{.Config.Identity.Source}} / {{.Config.Identity.Kind}}{{if eq .Config.Identity.Kind "legacy"}} <strong>Imported truncation rule – please check using the preview.</strong>{{end}}</dd>
 <dt>Last attempt</dt><dd>{{if .State.LastAttempt}}{{.State.LastAttempt.Format "2006-01-02 15:04:05 MST"}}{{else}}Not fetched yet{{end}}</dd>
 <dt>Last success</dt><dd>{{if .State.LastSuccess}}{{.State.LastSuccess.Format "2006-01-02 15:04:05 MST"}}{{else}}–{{end}}</dd>

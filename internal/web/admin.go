@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,11 +43,19 @@ type preview struct {
 	GUID, Link, Key, Error string
 }
 
+type groupOption struct {
+	ID       int64
+	Name     string
+	Path     string
+	Selected bool
+}
+
 type page struct {
 	Title                      string
 	CSRF                       string
 	Config                     feed.Config
 	Feeds                      []store.Summary
+	GroupOptions               []groupOption
 	Fields                     []field
 	Error                      string
 	Preview                    []preview
@@ -66,6 +75,7 @@ func (a *Admin) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/{$}", a.list)
 	mux.HandleFunc("GET /admin/feeds/new", a.form)
+	mux.HandleFunc("GET /admin/groups/new", a.form)
 	mux.HandleFunc("GET /admin/feeds/{id}", a.form)
 	mux.HandleFunc("POST /admin/feeds/save", a.save)
 	mux.HandleFunc("POST /admin/feeds/preview", a.preview)
@@ -151,6 +161,36 @@ func overrideFields(c feed.Config) []field {
 func (a *Admin) render(w http.ResponseWriter, r *http.Request, name string, p page, status int) {
 	p.CSRF, _ = r.Context().Value(csrfKey{}).(string)
 	p.Fields = overrideFields(p.Config)
+	if p.Config.Type == "group" && a.Store != nil {
+		options, err := a.Store.List(r.Context())
+		if err != nil {
+			a.failure(w, err)
+			return
+		}
+		// Keep configured priority on edit/preview, then offer unused sources.
+		byID := make(map[int64]store.Summary, len(options))
+		for _, option := range options {
+			byID[option.Config.ID] = option
+		}
+		appendOption := func(option store.Summary) {
+			if option.Config.Type == "" {
+				p.GroupOptions = append(p.GroupOptions, groupOption{
+					ID: option.Config.ID, Name: option.Config.Name, Path: option.Config.Path,
+					Selected: slices.Contains(p.Config.SourceIDs, option.Config.ID),
+				})
+			}
+		}
+		for _, id := range p.Config.SourceIDs {
+			if option, ok := byID[id]; ok {
+				appendOption(option)
+			}
+		}
+		for _, option := range options {
+			if !slices.Contains(p.Config.SourceIDs, option.Config.ID) {
+				appendOption(option)
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := a.templates.ExecuteTemplate(w, name, p); err != nil {
@@ -169,6 +209,9 @@ func (a *Admin) list(w http.ResponseWriter, r *http.Request) {
 
 func (a *Admin) form(w http.ResponseWriter, r *http.Request) {
 	c := feed.DefaultConfig()
+	if r.URL.Path == "/admin/groups/new" {
+		c.Type = "group"
+	}
 	if value := r.PathValue("id"); value != "" {
 		id, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || id <= 0 {
@@ -181,7 +224,11 @@ func (a *Admin) form(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	a.render(w, r, "form", page{Title: "Configure feed", Config: c}, http.StatusOK)
+	title := "Configure feed"
+	if c.Type == "group" {
+		title = "Configure group"
+	}
+	a.render(w, r, "form", page{Title: title, Config: c}, http.StatusOK)
 }
 
 func configFromForm(r *http.Request) (feed.Config, error) {
@@ -202,6 +249,14 @@ func configFromForm(r *http.Request) (feed.Config, error) {
 	c.Name = strings.TrimSpace(r.PostForm.Get("name"))
 	c.Path = strings.TrimSpace(r.PostForm.Get("path"))
 	c.URL = strings.TrimSpace(r.PostForm.Get("url"))
+	c.Type = r.PostForm.Get("type")
+	for _, value := range r.PostForm["source_ids"] {
+		id, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil || id <= 0 {
+			return c, errors.New("Invalid group source ID")
+		}
+		c.SourceIDs = append(c.SourceIDs, id)
+	}
 	c.Identity.Source, c.Identity.Kind = r.PostForm.Get("identity_source"), r.PostForm.Get("identity_kind")
 	c.Identity.Regex, c.Identity.Query = r.PostForm.Get("identity_regex"), strings.TrimSpace(r.PostForm.Get("identity_query"))
 	c.Identity.Hosts = strings.FieldsFunc(strings.ToLower(r.PostForm.Get("identity_hosts")), func(r rune) bool {
@@ -241,6 +296,11 @@ func (a *Admin) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = a.Store.Save(r.Context(), c)
+	if errors.Is(err, store.ErrInvalidGroup) {
+		a.render(w, r, "form", page{Title: "Configure group", Config: c,
+			Error: "Groups can contain only existing regular feeds."}, http.StatusBadRequest)
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		a.render(w, r, "form", page{Title: "Configure feed", Config: c,
 			Error: "Endpoint already in use or configuration has changed. Please reload."}, http.StatusConflict)
@@ -329,7 +389,7 @@ func (a *Admin) failure(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		http.Error(w, "Configuration changed; reload before retrying", http.StatusConflict)
+		http.Error(w, "Configuration changed or feed is used by a group; reload and remove group references before deleting", http.StatusConflict)
 		return
 	}
 	a.Logger.Error("administration database operation failed")
