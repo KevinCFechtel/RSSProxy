@@ -3,10 +3,16 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="id" value="{{.Config.ID}}">
 <input type="hidden" name="revision" value="{{.Config.Revision}}">
-<fieldset><legend>Feed</legend>
+<input type="hidden" name="type" value="{{.Config.Type}}">
+<fieldset><legend>{{if eq .Config.Type "group"}}Group{{else}}Feed{{end}}</legend>
 <label>Name (internal)<input name="name" value="{{.Config.Name}}" required maxlength="200"></label>
 <label>Public endpoint<input name="path" placeholder="/feeds/faz" value="{{.Config.Path}}" required></label>
+{{if eq .Config.Type "group"}}
+<p>Choose 1–8 existing source feeds. The order below determines which copy wins when an article appears in several feeds. Identity rules use the original GUID or resolved article URL.</p>
+{{range .GroupOptions}}<label class="group-source"><input type="checkbox" name="source_ids" value="{{.ID}}" {{if .Selected}}checked{{end}}> {{.Name}} ({{.Path}})</label>{{else}}<p>Create a regular feed first.</p>{{end}}
+{{else}}
 <label>Source URL<input type="url" name="url" value="{{.Config.URL}}" required></label>
+{{end}}
 </fieldset>
 <fieldset><legend>Article identity</legend>
 <p>A configured extraction takes precedence even with <code>isPermaLink=true</code>. A rule that does not match causes an error, not a silent fallback.</p>

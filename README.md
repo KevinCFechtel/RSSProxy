@@ -113,6 +113,30 @@ Rules can be tested in the administration without saving or making network reque
 
 When a rule changes, known source GUIDs/links can connect to the existing proxy identity through historical aliases. Ambiguous mappings cause an error. An arbitrary rule change cannot reliably reconstruct identities if all known source values change at the same time. Test such changes with real feed examples first.
 
+## Grouped feeds (deduplicated merged RSS)
+
+Create normal source feeds first in `/admin/`. Then choose **Add group**, give the group a
+name and public endpoint, and select up to 8 existing regular feeds. Subscribe your RSS
+reader to **the group endpoint only** rather than to every member feed.
+
+- Every successful group request contacts every source, using each source's stored
+  ETag/Last-Modified and snapshot for revalidation. There is no time-based cache.
+- Group identity extraction is configurable, independently of source feed rules.
+- The first listed source wins duplicate article metadata; original item categories
+  from all copies are combined, retaining category domains. Items are sorted by
+  publication time (newest first), falling back to update time; undated items come last.
+- Artwork, enclosures and article metadata are retained with source-relative URL
+  resolution. Group overrides apply to the merged output; individual sources'
+  presentation overrides do not.
+- Group GUIDs, original publication dates and modification timestamps are persisted.
+  Switching an existing subscription to a group may show articles as new once.
+  Individual source endpoints remain available and keep their own identities.
+- If any source fails, the whole group request fails without returning a partial or
+  stale successful response. Remaining sources are not fetched after a failure.
+- Referenced sources cannot be deleted until removed from all groups. Groups cannot
+  contain groups, and an existing feed cannot be converted between source and group.
+- Database migration `003_feed_groups.sql` runs automatically at startup.
+
 ## Feed and image overrides
 
 You can configure the feed title, description, website link, feed image/logo, image title, image link, and a fixed article image.

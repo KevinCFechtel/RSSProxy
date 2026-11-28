@@ -145,6 +145,9 @@ type Document struct {
 	Extras     []Element    `json:"extras,omitempty"`
 	ItemExtras [][]Element  `json:"item_extras,omitempty"`
 	ImageLink  string       `json:"image_link,omitempty"`
+	// Merged documents retain the original bases for relative URLs.
+	BaseURL        string   `json:"base_url,omitempty"`
+	ItemSourceURLs []string `json:"item_source_urls,omitempty"`
 }
 
 func Parse(data []byte) (*Document, error) {
